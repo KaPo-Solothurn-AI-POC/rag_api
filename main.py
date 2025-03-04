@@ -6,6 +6,8 @@ from typing import Iterable, List
 from shutil import copyfileobj
 import traceback
 
+from config import embeddings
+
 import uvicorn
 from langchain.schema import Document
 from contextlib import asynccontextmanager
@@ -130,8 +132,69 @@ def isHealthOK():
         return mongo_health_check()
     else:
         return True
+    
+@app.get("/test-api-key")
+async def test_api_key():
+    import os
+
+    api_key = os.getenv("RAG_OPENAI_API_KEY", "Not Found")
+    base_url = os.getenv("RAG_OPENAI_BASEURL", "Not Found")
+
+    return {"api_key": api_key, "base_url": base_url}
 
 
+@app.get("/test-embedding")
+async def test_embedding():
+    import os
+    from openai import OpenAI
+
+    client = OpenAI(
+        api_key = os.getenv("RAG_OPENAI_API_KEY", "Not Found"),
+        base_url = os.getenv("RAG_OPENAI_BASEURL", "Not Found")
+    )
+
+    try:
+        embedding = client.embeddings.create(
+            input="Test query for embedding generation",
+            model="nvidia/llama-3.2-nv-embedqa-1b-v2",
+            extra_body={"input_type": "query", "truncate": "NONE"},
+        )
+        return {"embedding": embedding}
+    except Exception as e:
+        return {"error": str(e)}
+@app.get("/test-embedding-auth")
+async def test_embedding_auth():
+    import os
+    import requests
+    import logging
+    api_key = os.getenv("RAG_OPENAI_API_KEY", "Not Found")
+    base_url = os.getenv("RAG_OPENAI_BASEURL", "Not Found")
+
+    logging.info(f"Using API Key: {api_key[:5]}******")  # Mask API Key for security
+    logging.info(f"Using Base URL: {base_url}")
+
+    if api_key == "Not Found" or base_url == "Not Found":
+        return {"error": "API key or base URL not found"}
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "input": "Test embedding request",
+        "model": "nvidia/llama-3.2-nv-embedqa-1b-v2"
+    }
+
+    try:
+        response = requests.post(f"{base_url}/v1/embeddings", json=payload, headers=headers, timeout=10)
+        response.raise_for_status()  # Raise an error for HTTP failures (4xx, 5xx)
+        logging.info(f"API Response: {response.status_code} - {response.text}")
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logging.error(f"API Call Failed: {str(e)}")
+        return {"error": str(e)}
+    
 @app.get("/health")
 async def health_check():
     try:
@@ -214,6 +277,76 @@ async def delete_documents(document_ids: List[str] = Body(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# @app.post("/query")
+# async def query_embeddings_by_file_id(
+#     body: QueryRequestBody,
+#     request: Request,
+# ):
+#     if not hasattr(request.state, "user"):
+#         user_authorized = body.entity_id if body.entity_id else "public"
+#     else:
+#         user_authorized = (
+#             body.entity_id if body.entity_id else request.state.user.get("id")
+#         )
+
+#     authorized_documents = []
+
+#     try:
+#         embedding = vector_store.embedding_function.embed_query(body.query)
+
+#         if isinstance(vector_store, AsyncPgVector):
+#             documents = await run_in_executor(
+#                 None,
+#                 vector_store.similarity_search_with_score_by_vector,
+#                 embedding,
+#                 k=body.k,
+#                 filter={"file_id": body.file_id},
+#             )
+#         else:
+#             documents = vector_store.similarity_search_with_score_by_vector(
+#                 embedding, k=body.k, filter={"file_id": body.file_id}
+#             )
+
+#         if not documents:
+#             return authorized_documents
+
+#         document, score = documents[0]
+#         doc_metadata = document.metadata
+#         doc_user_id = doc_metadata.get("user_id")
+
+#         if doc_user_id is None or doc_user_id == user_authorized:
+#             authorized_documents = documents
+#         else:
+#             # If using entity_id and access denied, try again with user's actual ID
+#             if body.entity_id and hasattr(request.state, "user"):
+#                 user_authorized = request.state.user.get("id")
+#                 if doc_user_id == user_authorized:
+#                     authorized_documents = documents
+#                 else:
+#                     if body.entity_id == doc_user_id:
+#                         logger.warning(
+#                             f"Entity ID {body.entity_id} matches document user_id but user {user_authorized} is not authorized"
+#                         )
+#                     else:
+#                         logger.warning(
+#                             f"Access denied for both entity ID {body.entity_id} and user {user_authorized} to document with user_id {doc_user_id}"
+#                         )
+#             else:
+#                 logger.warning(
+#                     f"Unauthorized access attempt by user {user_authorized} to a document with user_id {doc_user_id}"
+#                 )
+
+#         return authorized_documents
+
+#     except Exception as e:
+#         logger.error(
+#             "Error in query embeddings | File ID: %s | Query: %s | Error: %s | Traceback: %s",
+#             body.file_id,
+#             body.query,
+#             str(e),
+#             traceback.format_exc(),
+#         )
+#         raise HTTPException(status_code=500, detail=str(e))
 @app.post("/query")
 async def query_embeddings_by_file_id(
     body: QueryRequestBody,
@@ -229,7 +362,7 @@ async def query_embeddings_by_file_id(
     authorized_documents = []
 
     try:
-        embedding = vector_store.embedding_function.embed_query(body.query)
+        embedding = embeddings.embed_query(body.query)  # Use `embeddings` from `config.py`
 
         if isinstance(vector_store, AsyncPgVector):
             documents = await run_in_executor(
@@ -254,24 +387,7 @@ async def query_embeddings_by_file_id(
         if doc_user_id is None or doc_user_id == user_authorized:
             authorized_documents = documents
         else:
-            # If using entity_id and access denied, try again with user's actual ID
-            if body.entity_id and hasattr(request.state, "user"):
-                user_authorized = request.state.user.get("id")
-                if doc_user_id == user_authorized:
-                    authorized_documents = documents
-                else:
-                    if body.entity_id == doc_user_id:
-                        logger.warning(
-                            f"Entity ID {body.entity_id} matches document user_id but user {user_authorized} is not authorized"
-                        )
-                    else:
-                        logger.warning(
-                            f"Access denied for both entity ID {body.entity_id} and user {user_authorized} to document with user_id {doc_user_id}"
-                        )
-            else:
-                logger.warning(
-                    f"Unauthorized access attempt by user {user_authorized} to a document with user_id {doc_user_id}"
-                )
+            logger.warning(f"Unauthorized access attempt by user {user_authorized} to a document with user_id {doc_user_id}")
 
         return authorized_documents
 
@@ -291,6 +407,58 @@ def generate_digest(page_content: str):
     return hash_obj.hexdigest()
 
 
+# async def store_data_in_vector_db(
+#     data: Iterable[Document],
+#     file_id: str,
+#     user_id: str = "",
+#     clean_content: bool = False,
+# ) -> bool:
+#     text_splitter = RecursiveCharacterTextSplitter(
+#         chunk_size=app.state.CHUNK_SIZE, chunk_overlap=app.state.CHUNK_OVERLAP
+#     )
+#     documents = text_splitter.split_documents(data)
+
+#     # If `clean_content` is True, clean the page_content of each document (remove null bytes)
+#     if clean_content:
+#         for doc in documents:
+#             doc.page_content = clean_text(doc.page_content)
+
+#     # Preparing documents with page content and metadata for insertion.
+#     docs = [
+#         Document(
+#             page_content=doc.page_content,
+#             metadata={
+#                 "file_id": file_id,
+#                 "user_id": user_id,
+#                 "digest": generate_digest(doc.page_content),
+#                 **(doc.metadata or {}),
+#             },
+#         )
+#         for doc in documents
+#     ]
+
+#     try:
+#         if isinstance(vector_store, AsyncPgVector):
+#             ids = await vector_store.aadd_documents(
+#                 docs, ids=[file_id] * len(documents)
+#             )
+#         else:
+#             ids = vector_store.add_documents(docs, ids=[file_id] * len(documents))
+
+#         return {"message": "Documents added successfully", "ids": ids}
+
+#     except Exception as e:
+#         logger.error(
+#             "Failed to store data in vector DB | File ID: %s | User ID: %s | Error: %s | Traceback: %s",
+#             file_id,
+#             user_id,
+#             str(e),
+#             traceback.format_exc(),
+#         )
+#         return {"message": "An error occurred while adding documents.", "error": str(e)}
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.schema import Document
+
 async def store_data_in_vector_db(
     data: Iterable[Document],
     file_id: str,
@@ -302,44 +470,47 @@ async def store_data_in_vector_db(
     )
     documents = text_splitter.split_documents(data)
 
-    # If `clean_content` is True, clean the page_content of each document (remove null bytes)
     if clean_content:
         for doc in documents:
             doc.page_content = clean_text(doc.page_content)
 
-    # Preparing documents with page content and metadata for insertion.
-    docs = [
-        Document(
-            page_content=doc.page_content,
-            metadata={
-                "file_id": file_id,
-                "user_id": user_id,
-                "digest": generate_digest(doc.page_content),
-                **(doc.metadata or {}),
-            },
-        )
-        for doc in documents
-    ]
+    # Generate embeddings using vector_store's embedding function
+    docs_with_embeddings = []
+    try:
+        for doc in documents:
+            embedding = embeddings.embed_query(doc.page_content)  # Use the global `embeddings` object
+            docs_with_embeddings.append(
+                Document(
+                    page_content=doc.page_content,
+                    metadata={
+                        "file_id": file_id,
+                        "user_id": user_id,
+                        "digest": generate_digest(doc.page_content),
+                        "embedding": embedding,  # Store the generated embedding
+                        **(doc.metadata or {}),
+                    },
+                )
+            )
+
+    except Exception as e:
+        logger.error(f"Embedding generation failed: {str(e)}\nTraceback:\n{traceback.format_exc()}")
+        return {"message": "Embedding generation failed", "error": str(e)}
 
     try:
+        # Store documents WITH embeddings
         if isinstance(vector_store, AsyncPgVector):
-            ids = await vector_store.aadd_documents(
-                docs, ids=[file_id] * len(documents)
-            )
+            ids = await vector_store.aadd_documents(docs_with_embeddings, ids=[file_id] * len(docs_with_embeddings))
+        elif isinstance(vector_store, AtlasMongoVector):
+            ids = vector_store.add_documents(docs_with_embeddings, ids=[file_id] * len(docs_with_embeddings))
         else:
-            ids = vector_store.add_documents(docs, ids=[file_id] * len(documents))
+            ids = vector_store.add_documents(docs_with_embeddings, ids=[file_id] * len(docs_with_embeddings))
 
         return {"message": "Documents added successfully", "ids": ids}
 
     except Exception as e:
-        logger.error(
-            "Failed to store data in vector DB | File ID: %s | User ID: %s | Error: %s | Traceback: %s",
-            file_id,
-            user_id,
-            str(e),
-            traceback.format_exc(),
-        )
-        return {"message": "An error occurred while adding documents.", "error": str(e)}
+        logger.error(f"Failed to store data in vector DB: {str(e)}\nTraceback:\n{traceback.format_exc()}")
+        return {"message": "Failed to store data in vector DB.", "error": str(e)}
+
 
 
 def get_loader(filename: str, file_content_type: str, filepath: str):
@@ -433,6 +604,98 @@ async def embed_local_file(
             )
 
 
+# @app.post("/embed")
+# async def embed_file(
+#     request: Request,
+#     file_id: str = Form(...),
+#     file: UploadFile = File(...),
+#     entity_id: str = Form(None),
+# ):
+#     response_status = True
+#     response_message = "File processed successfully."
+#     known_type = None
+#     if not hasattr(request.state, "user"):
+#         user_id = entity_id if entity_id else "public"
+#     else:
+#         user_id = entity_id if entity_id else request.state.user.get("id")
+
+#     temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
+#     os.makedirs(temp_base_path, exist_ok=True)
+#     temp_file_path = os.path.join(RAG_UPLOAD_DIR, user_id, file.filename)
+
+#     try:
+#         async with aiofiles.open(temp_file_path, "wb") as temp_file:
+#             chunk_size = 64 * 1024  # 64 KB
+#             while content := await file.read(chunk_size):
+#                 await temp_file.write(content)
+#     except Exception as e:
+#         logger.error(
+#             "Failed to save uploaded file | Path: %s | Error: %s | Traceback: %s",
+#             temp_file_path,
+#             str(e),
+#             traceback.format_exc(),
+#         )
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail=f"Failed to save the uploaded file. Error: {str(e)}",
+#         )
+
+#     try:
+#         loader, known_type, file_ext = get_loader(
+#             file.filename, file.content_type, temp_file_path
+#         )
+#         data = loader.load()
+#         result = await store_data_in_vector_db(
+#             data=data, file_id=file_id, user_id=user_id, clean_content=file_ext == "pdf"
+#         )
+
+#         if not result:
+#             response_status = False
+#             response_message = "Failed to process/store the file data."
+#             raise HTTPException(
+#                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#                 detail="Failed to process/store the file data.",
+#             )
+#         elif "error" in result:
+#             response_status = False
+#             response_message = "Failed to process/store the file data."
+#             if isinstance(result["error"], str):
+#                 response_message = result["error"]
+#             else:
+#                 raise HTTPException(
+#                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#                     detail="An unspecified error occurred.",
+#                 )
+#     except Exception as e:
+#         response_status = False
+#         response_message = f"Error during file processing: {str(e)}"
+#         logger.error(
+#             "Error during file processing: %s\nTraceback: %s",
+#             str(e),
+#             traceback.format_exc(),
+#         )
+#         raise HTTPException(
+#             status_code=status.HTTP_400_BAD_REQUEST,
+#             detail=f"Error during file processing: {str(e)}",
+#         )
+#     finally:
+#         try:
+#             await aiofiles.os.remove(temp_file_path)
+#         except Exception as e:
+#             logger.error(
+#                 "Failed to remove temporary file | Path: %s | Error: %s | Traceback: %s",
+#                 temp_file_path,
+#                 str(e),
+#                 traceback.format_exc(),
+#             )
+
+#     return {
+#         "status": response_status,
+#         "message": response_message,
+#         "file_id": file_id,
+#         "filename": file.filename,
+#         "known_type": known_type,
+#     }
 @app.post("/embed")
 async def embed_file(
     request: Request,
@@ -440,9 +703,13 @@ async def embed_file(
     file: UploadFile = File(...),
     entity_id: str = Form(None),
 ):
+    if not file_id:
+        raise HTTPException(status_code=400, detail="Missing file_id parameter.")
+
     response_status = True
     response_message = "File processed successfully."
     known_type = None
+
     if not hasattr(request.state, "user"):
         user_id = entity_id if entity_id else "public"
     else:
@@ -458,65 +725,38 @@ async def embed_file(
             while content := await file.read(chunk_size):
                 await temp_file.write(content)
     except Exception as e:
-        logger.error(
-            "Failed to save uploaded file | Path: %s | Error: %s | Traceback: %s",
-            temp_file_path,
-            str(e),
-            traceback.format_exc(),
-        )
+        logger.error(f"Failed to save uploaded file: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save the uploaded file. Error: {str(e)}",
         )
 
     try:
+        # Load document
         loader, known_type, file_ext = get_loader(
             file.filename, file.content_type, temp_file_path
         )
         data = loader.load()
+
+        # Store text chunks & embeddings in vector DB
         result = await store_data_in_vector_db(
-            data=data, file_id=file_id, user_id=user_id, clean_content=file_ext == "pdf"
+            data=data, file_id=file_id, user_id=user_id, clean_content=(file_ext == "pdf")
         )
 
-        if not result:
+        if "error" in result:
             response_status = False
-            response_message = "Failed to process/store the file data."
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to process/store the file data.",
-            )
-        elif "error" in result:
-            response_status = False
-            response_message = "Failed to process/store the file data."
-            if isinstance(result["error"], str):
-                response_message = result["error"]
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="An unspecified error occurred.",
-                )
+            response_message = result["error"]
+            raise HTTPException(status_code=500, detail=response_message)
     except Exception as e:
         response_status = False
         response_message = f"Error during file processing: {str(e)}"
-        logger.error(
-            "Error during file processing: %s\nTraceback: %s",
-            str(e),
-            traceback.format_exc(),
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error during file processing: {str(e)}",
-        )
+        logger.error(f"Error during file processing: {str(e)}")
+        raise HTTPException(status_code=400, detail=response_message)
     finally:
         try:
             await aiofiles.os.remove(temp_file_path)
         except Exception as e:
-            logger.error(
-                "Failed to remove temporary file | Path: %s | Error: %s | Traceback: %s",
-                temp_file_path,
-                str(e),
-                traceback.format_exc(),
-            )
+            logger.error(f"Failed to remove temporary file: {str(e)}")
 
     return {
         "status": response_status,
@@ -525,6 +765,7 @@ async def embed_file(
         "filename": file.filename,
         "known_type": known_type,
     }
+
 
 
 @app.get("/documents/{id}/context")
@@ -655,12 +896,31 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# @app.exception_handler(RequestValidationError)
+# async def validation_exception_handler(request: Request, exc: RequestValidationError):
+#     body = await request.body()
+#     logger.debug(f"Validation error occurred")
+#     logger.debug(f"Raw request body: {body.decode()}")
+#     logger.debug(f"Validation errors: {exc.errors()}")
+#     return JSONResponse(
+#         status_code=422,
+#         content={
+#             "detail": exc.errors(),
+#             "body": body.decode(),
+#             "message": "Request validation failed",
+#         },
+#     )
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    body = await request.body()
+    try:
+        body = await request.body()
+    except RuntimeError:
+        body = b"[Stream Already Consumed]"  # If body is already read, set default value
+    
     logger.debug(f"Validation error occurred")
     logger.debug(f"Raw request body: {body.decode()}")
     logger.debug(f"Validation errors: {exc.errors()}")
+    
     return JSONResponse(
         status_code=422,
         content={
@@ -669,7 +929,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "message": "Request validation failed",
         },
     )
-
 
 if debug_mode:
     app.include_router(router=pgvector_router)

@@ -24,6 +24,7 @@ class EmbeddingsProvider(Enum):
     HUGGINGFACETEI = "huggingfacetei"
     OLLAMA = "ollama"
     BEDROCK = "bedrock"
+    CUSTOM = "custom"
 
 
 def get_env_variable(
@@ -225,6 +226,14 @@ def init_embeddings(provider, model):
             model_id=model,
             region_name=AWS_DEFAULT_REGION,
         )
+    elif provider == EmbeddingsProvider.CUSTOM:
+        from langchain_nvidia_ai_endpoints import NVIDIAEmbeddings
+
+        return NVIDIAEmbeddings(
+            api_key = RAG_OPENAI_API_KEY,
+            base_url = RAG_OPENAI_BASEURL,
+            model = model
+        )
     else:
         raise ValueError(f"Unsupported embeddings provider: {provider}")
 
@@ -252,6 +261,10 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.BEDROCK:
         "EMBEDDINGS_MODEL", "amazon.titan-embed-text-v1"
     )
     AWS_DEFAULT_REGION = get_env_variable("AWS_DEFAULT_REGION", "us-east-1")
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.CUSTOM:
+    EMBEDDINGS_MODEL = get_env_variable(
+        "EMBEDDINGS_MODEL", "nvidia/llama-3.2-nv-embedqa-1b-v2"
+    )
 else:
     raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
 

@@ -251,7 +251,7 @@ async def query_embeddings_by_file_id(
         doc_metadata = document.metadata
         doc_user_id = doc_metadata.get("user_id")
 
-        if doc_user_id is None or doc_user_id == user_authorized:
+        if doc_user_id is None or doc_user_id == user_authorized or doc_user_id == "public":
             authorized_documents = documents
         else:
             # If using entity_id and access denied, try again with user's actual ID
@@ -474,6 +474,9 @@ async def embed_file(
             file.filename, file.content_type, temp_file_path
         )
         data = loader.load()
+        logger.info(
+            f'User Id: {user_id}'
+        )
         result = await store_data_in_vector_db(
             data=data, file_id=file_id, user_id=user_id, clean_content=file_ext == "pdf"
         )

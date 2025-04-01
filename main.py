@@ -213,7 +213,33 @@ async def delete_documents(document_ids: List[str] = Body(...)):
         )
         raise HTTPException(status_code=500, detail=str(e))
 
+# def search_documents(vector_store, body):
+#     query_embedding =  vector_store.embedding_function.embed_query(body.query)#generate_embedding(query_text)  # Get the embedding of the user query
+    
+#     if isinstance(vector_store, AsyncPgVector):
+#         documents = await run_in_executor(
+#             None,
+#             vector_store.similarity_search_with_score_by_vector,
+#             query_embedding,
+#             k = body.k,
+#             filter = {"file_id": {"$in": body.file_ids}},
+#         )
+#     else:
+#         logger.info("No PGVector DB found.")
+    
+#     if not documents:
+#         raise HTTPException(
+#             status_code = 404,
+#             detail = "No documents found for given query."
+#         )
+    
+#     results = []
 
+#     for doc in documents:
+#         document_metadata = {
+
+#         }
+    
 @app.post("/query")
 async def query_embeddings_by_file_id(
     body: QueryRequestBody,
@@ -475,7 +501,7 @@ async def embed_file(
         )
         data = loader.load()
         logger.info(
-            f'User Id: {user_id}'
+            f'User Id: {user_id}, File Name: {file.filename}, Content_Type: {file.content_type}',
         )
         result = await store_data_in_vector_db(
             data=data, file_id=file_id, user_id=user_id, clean_content=file_ext == "pdf"
@@ -529,7 +555,185 @@ async def embed_file(
         "known_type": known_type,
     }
 
+#from datetime import datetime
+async def store_document_in_vector_db(
+    data: Iterable[Document],
+    file_id: str,
+    file_path: str,
+    #vector_store: AsyncPgVector,
+    user_id: str = "",
+    clean_content: bool = False,
+) -> bool:
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=app.state.CHUNK_SIZE, chunk_overlap=app.state.CHUNK_OVERLAP
+    )
+    documents = text_splitter.split_documents(data)
 
+    # If `clean_content` is True, clean the page_content of each document (remove null bytes)
+    if clean_content:
+        for doc in documents:
+            doc.page_content = clean_text(doc.page_content)
+
+    # Preparing documents with page content and metadata for insertion.
+    docs = [
+        Document(
+            page_content=doc.page_content,
+            metadata={
+                "file_id": file_id,
+                "user_id": user_id,
+                "digest": generate_digest(doc.page_content),
+                "file_name": os.path.basename(file_path),
+                "file_path": file_path,
+                #"created_at": datetime.now(datetime.timezone.utc),
+                **(doc.metadata or {}),
+            },
+        )
+        for doc in documents
+    ]
+
+    try:
+        ids = await vector_store.aadd_documents(
+                docs, ids=[file_id] * len(documents)
+            )
+
+        return {"message": "Documents added successfully", "ids": ids}
+
+    except Exception as e:
+        logger.error(
+            "Failed to store data in vector DB | File ID: %s | User ID: %s | Error: %s | Traceback: %s",
+            file_id,
+            user_id,
+            str(e),
+            traceback.format_exc(),
+        )
+        return {"message": "An error occurred while adding documents.", "error": str(e)}
+
+# import io
+# def create_upload_file_from_path(file_path: str) -> UploadFile:
+#     # Read file content as bytes
+#     with open(file_path, "rb") as f:
+#         file_content = f.read()
+
+#     # Use io.BytesIO to simulate an in-memory file
+#     file_like_object = io.BytesIO(file_content)
+
+#     # Create an UploadFile object from the file-like object
+#     return UploadFile(file=file_like_object, filename=os.path.basename(file_path))
+import uuid
+@app.post("/upload_documents")
+async def embed_upload_documents(
+    request: Request,
+    file_paths: List[str],
+    user_id: str = "public",
+):
+    response_status = True
+    response_message = "File processed successfully."
+    known_type = None
+
+    temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
+    os.makedirs(temp_base_path, exist_ok=True)
+    
+    all_ids = []
+    try: 
+        
+
+        for file_path in file_paths:
+            file_id = str(uuid.uuid4())
+            file_name = os.path.basename(file_path)
+            #upload_file = create_upload_file_from_path(file_path)
+            temp_file_path = os.path.join(temp_base_path, file_name)
+
+            try:
+                if not os.path.exists(file_path):
+                    raise HTTPException(
+                        status_code = status.HTTP_400_BAD_REQUEST,
+                        detail = f"File not found: {file_path}"
+                    )
+                async with aiofiles.open(temp_file_path, "wb") as temp_file:
+                    chunk_size = 64 *1024
+                    with open(file_path, "rb") as source_file:
+                        while chunk := source_file.read(chunk_size):
+                            await temp_file.write(chunk)
+                    # while content := await upload_file.read(chunk_size):
+                    #     await temp_file.write(content)
+            except Exception as e:
+                logger.error(
+                    "Failed to save uploaded file | Path: %s | Error: %s | Traceback: %s",
+                    temp_file_path,
+                    str(e),
+                    traceback.format_exc(),
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to save the uploaded file. Error: {str(e)}",
+                )
+            
+            try:
+                loader, known_type, file_ext = get_loader(
+                    file_name, "application/pdf", temp_file_path#upload_file.filename, upload_file.content_type, temp_file_path
+                )
+                data = loader.load()
+                logger.info(
+                    f'User Id: {user_id}, File Name: {file_name}',
+                )
+                result = await store_document_in_vector_db(
+                    data= data, 
+                    file_id = file_id, 
+                    file_path=file_path, 
+                    user_id= user_id, 
+                    clean_content=file_ext == "pdf"
+                    )
+                if not result:
+                    response_status = False
+                    response_message = "Failed to process/store the file data."
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to process/store the file data.",
+                    )
+                elif "error" in result:
+                    response_status = False
+                    response_message = "Failed to process/store the file data."
+                    if isinstance(result["error"], str):
+                        response_message = result["error"]
+                    else:
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="An unspecified error occurred.",
+                        )
+                all_ids.append(result["ids"])
+            except Exception as e:
+                response_status = False
+                response_message = f"Error during file processing: {str(e)}"
+                logger.error(
+                    "Error during file processing: %s\nTraceback: %s",
+                    str(e),
+                    traceback.format_exc(),
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Error during file processing: {str(e)}",
+                )
+            finally:
+                try:
+                    await aiofiles.os.remove(temp_file_path)
+                except Exception as e:
+                    logger.error(
+                        "Failed to remove temporary file | Path: %s | Error: %s | Traceback: %s",
+                        temp_file_path,
+                        str(e),
+                        traceback.format_exc(),
+                    )
+        return {
+            "status": response_status,
+            "message": response_message, 
+            "ids": all_ids
+            }
+    except Exception as e:
+        logger.error(f"Error in upload_documents: {str(e)}\nTraceback: {traceback.format_exc()}")
+        return {"message": "An error occurred while processing files.", "status": "failure"}
+
+           
+    
 @app.get("/documents/{id}/context")
 async def load_document_context(id: str):
     ids = [id]

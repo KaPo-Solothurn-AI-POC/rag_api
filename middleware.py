@@ -12,7 +12,7 @@ async def security_middleware(request: Request, call_next):
     async def next_middleware_call():
         return await call_next(request)
 
-    if request.url.path in {"/docs", "/openapi.json", "/health", "/embed", "/embed-upload", "/test-api-key", "/test-embedding-auth"}:
+    if request.url.path in {"/docs", "/openapi.json", "/health", "/embed", "/embed-upload", "/upload_documents"}:
         return await next_middleware_call()
 
     jwt_secret = os.getenv("JWT_SECRET")

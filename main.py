@@ -608,17 +608,7 @@ async def store_document_in_vector_db(
         )
         return {"message": "An error occurred while adding documents.", "error": str(e)}
 
-# import io
-# def create_upload_file_from_path(file_path: str) -> UploadFile:
-#     # Read file content as bytes
-#     with open(file_path, "rb") as f:
-#         file_content = f.read()
 
-#     # Use io.BytesIO to simulate an in-memory file
-#     file_like_object = io.BytesIO(file_content)
-
-#     # Create an UploadFile object from the file-like object
-#     return UploadFile(file=file_like_object, filename=os.path.basename(file_path))
 import uuid
 @app.post("/upload_documents")
 async def embed_upload_documents(
@@ -636,7 +626,7 @@ async def embed_upload_documents(
     all_ids = []
     try: 
         
-
+        #TODO: Logic for file paths, temp_filepath and volumne might need to be adjusted
         for file_path in file_paths:
             file_id = str(uuid.uuid4())
             file_name = os.path.basename(file_path)
@@ -669,6 +659,7 @@ async def embed_upload_documents(
                 )
             
             try:
+                #TODO: adapted for pdf documents, for other types, might need to be adjusted
                 loader, known_type, file_ext = get_loader(
                     file_name, "application/pdf", temp_file_path#upload_file.filename, upload_file.content_type, temp_file_path
                 )

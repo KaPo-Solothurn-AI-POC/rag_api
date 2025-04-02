@@ -262,13 +262,18 @@ async def query_embeddings_by_file_id(
                 None,
                 vector_store.similarity_search_with_score_by_vector,
                 embedding,
-                k=body.k,
-                filter={"file_id": body.file_id},
+                k= 5 #body.k,
+                #filter={"file_id": body.file_id},
+                #filter={},
             )
+            #logger.info("using no filter")
+            logger.info(documents)
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
-                embedding, k=body.k, filter={"file_id": body.file_id}
+                #embedding, k=body.k, filter={"file_id": body.file_id}
+                embedding, k=body.k, filter={}
             )
+            logger.info("using no filter and similarity search")
 
         if not documents:
             return authorized_documents

@@ -240,6 +240,7 @@ async def delete_documents(document_ids: List[str] = Body(...)):
 
 #         }
     
+#TODO: Build post that queries and returns documents, so we can use it as context in the OpenAICLient? 
 @app.post("/query")
 async def query_embeddings_by_file_id(
     body: QueryRequestBody,
@@ -262,16 +263,16 @@ async def query_embeddings_by_file_id(
                 None,
                 vector_store.similarity_search_with_score_by_vector,
                 embedding,
-                k= 5 #body.k,
-                #filter={"file_id": body.file_id},
+                k= body.k,
+                filter={"file_id": body.file_id},
                 #filter={},
             )
-            #logger.info("using no filter")
+            logger.info("using no filter")
             logger.info(documents)
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
-                #embedding, k=body.k, filter={"file_id": body.file_id}
-                embedding, k=body.k, filter={}
+                embedding, k=body.k, filter={"file_id": body.file_id}
+                #embedding, k=body.k, filter={}
             )
             logger.info("using no filter and similarity search")
 
@@ -856,6 +857,44 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
             traceback.format_exc(),
         )
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/context")
+async def load_document_context(request: Request, query: str, k: int = 4):
+    try:
+        # Step 1: Get the embedding for the query
+        embedding = vector_store.embedding_function.embed_query(query)
+        
+        # Step 2: Perform a similarity search for the query in the vector store
+        if isinstance(vector_store, AsyncPgVector):
+            documents = await run_in_executor(
+                None,
+                vector_store.similarity_search_with_score_by_vector,
+                embedding,
+                k=k  # Retrieve top k relevant documents
+            )
+        else:
+            documents = vector_store.similarity_search_with_score_by_vector(
+                embedding, k=k
+            )
+
+        # Step 3: Return the documents with metadata (including filename) and embeddings
+        if not documents:
+            raise HTTPException(status_code=404, detail="No documents found for the given query")
+
+        # Return documents with embeddings and filenames
+        return [
+            {
+                "filename": doc.metadata.get("filename"),
+                "embedding": doc.embedding,  # Include the embedding or any other relevant data
+                "content": doc.page_content  # Optionally include the document's content
+            }
+            for doc, _ in documents  # Assuming `documents` is a list of tuples (document, score)
+        ]
+    
+    except Exception as e:
+        logger.error(f"Error retrieving context for query '{query}': {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
 
 
 @app.exception_handler(RequestValidationError)

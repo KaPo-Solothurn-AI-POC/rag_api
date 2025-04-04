@@ -31,6 +31,10 @@ class QueryRequestBody(BaseModel):
     k: int = 4
     entity_id: Optional[str] = None
 
+class ContextRequestBody(BaseModel):
+    query: str
+    k: int = 4
+    entity_id: Optional[str] = None
 
 class CleanupMethod(str, Enum):
     incremental = "incremental"

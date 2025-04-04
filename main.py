@@ -45,6 +45,7 @@ from models import (
     QueryRequestBody,
     DocumentResponse,
     QueryMultipleBody,
+    ContextRequestBody
 )
 from psql import PSQLDatabase, ensure_custom_id_index_on_embedding, pg_health_check
 from pgvector_routes import router as pgvector_router
@@ -858,11 +859,23 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
         )
         raise HTTPException(status_code=500, detail=str(e))
     
-@app.get("/context")
-async def load_document_context(request: Request, query: str, k: int = 4):
+@app.post("/context")
+async def load_document_context(
+    body: ContextRequestBody, 
+    request: Request,
+): 
+    if not hasattr(request.state, "user"):
+        user_authorized = body.entity_id if body.entity_id else "public"
+    else:
+        user_authorized = (
+            body.entity_id if body.entity_id else request.state.user.get("id")
+        )
+
+    authorized_documents = []
+
     try:
         # Step 1: Get the embedding for the query
-        embedding = vector_store.embedding_function.embed_query(query)
+        embedding = vector_store.embedding_function.embed_query(body.query)
         
         # Step 2: Perform a similarity search for the query in the vector store
         if isinstance(vector_store, AsyncPgVector):
@@ -870,29 +883,57 @@ async def load_document_context(request: Request, query: str, k: int = 4):
                 None,
                 vector_store.similarity_search_with_score_by_vector,
                 embedding,
-                k=k  # Retrieve top k relevant documents
+                k=body.k  # Retrieve top k relevant documents
             )
+            logger.info(documents)
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
-                embedding, k=k
+                embedding, k=body.k
             )
 
-        # Step 3: Return the documents with metadata (including filename) and embeddings
         if not documents:
-            raise HTTPException(status_code=404, detail="No documents found for the given query")
+            return authorized_documents
+        
+        document, score = documents[0]
+        doc_metadata = document.metadata
+        doc_user_id = doc_metadata.get("user_id")
+
+        if doc_user_id is None or doc_user_id == user_authorized or doc_user_id == "public":
+            authorized_documents = documents
+        else:
+            # If using entity_id and access denied, try again with user's actual ID
+            if body.entity_id and hasattr(request.state, "user"):
+                user_authorized = request.state.user.get("id")
+                if doc_user_id == user_authorized:
+                    authorized_documents = documents
+                else:
+                    if body.entity_id == doc_user_id:
+                        logger.warning(
+                            f"Entity ID {body.entity_id} matches document user_id but user {user_authorized} is not authorized"
+                        )
+                    else:
+                        logger.warning(
+                            f"Access denied for both entity ID {body.entity_id} and user {user_authorized} to document with user_id {doc_user_id}"
+                        )
+            else:
+                logger.warning(
+                    f"Unauthorized access attempt by user {user_authorized} to a document with user_id {doc_user_id}"
+                )
+
+        return authorized_documents
 
         # Return documents with embeddings and filenames
-        return [
-            {
-                "filename": doc.metadata.get("filename"),
-                "embedding": doc.embedding,  # Include the embedding or any other relevant data
-                "content": doc.page_content  # Optionally include the document's content
-            }
-            for doc, _ in documents  # Assuming `documents` is a list of tuples (document, score)
-        ]
+        # return [
+        #     {
+        #         "filename": doc.metadata.get("filename"),
+        #         "embedding": doc.embedding,  # Include the embedding or any other relevant data
+        #         "content": doc.page_content  # Optionally include the document's content
+        #     }
+        #     for doc, _ in documents  # Assuming `documents` is a list of tuples (document, score)
+        # ]
     
     except Exception as e:
-        logger.error(f"Error retrieving context for query '{query}': {str(e)}")
+        logger.error(f"Error retrieving context for query '{body.query}': {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 

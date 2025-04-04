@@ -21,6 +21,6 @@ ENV NLTK_DATA=/app/nltk_data
 # Disable Unstructured analytics
 ENV SCARF_NO_ANALYTICS=true
 
-COPY . .
+## COPY . . # Code is mounted during development
 
 CMD ["python", "main.py"]

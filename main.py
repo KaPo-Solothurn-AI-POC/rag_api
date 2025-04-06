@@ -864,12 +864,7 @@ async def load_document_context(
     body: ContextRequestBody, 
     request: Request,
 ): 
-    if not hasattr(request.state, "user"):
-        user_authorized = body.entity_id if body.entity_id else "public"
-    else:
-        user_authorized = (
-            body.entity_id if body.entity_id else request.state.user.get("id")
-        )
+    user_authorized = "public"
 
     authorized_documents = []
 
@@ -898,29 +893,30 @@ async def load_document_context(
         doc_metadata = document.metadata
         doc_user_id = doc_metadata.get("user_id")
 
-        if doc_user_id is None or doc_user_id == user_authorized or doc_user_id == "public":
+        if doc_user_id == "public":
             authorized_documents = documents
-        else:
-            # If using entity_id and access denied, try again with user's actual ID
-            if body.entity_id and hasattr(request.state, "user"):
-                user_authorized = request.state.user.get("id")
-                if doc_user_id == user_authorized:
-                    authorized_documents = documents
-                else:
-                    if body.entity_id == doc_user_id:
-                        logger.warning(
-                            f"Entity ID {body.entity_id} matches document user_id but user {user_authorized} is not authorized"
-                        )
-                    else:
-                        logger.warning(
-                            f"Access denied for both entity ID {body.entity_id} and user {user_authorized} to document with user_id {doc_user_id}"
-                        )
-            else:
-                logger.warning(
-                    f"Unauthorized access attempt by user {user_authorized} to a document with user_id {doc_user_id}"
-                )
+            logger.info(f"Authorized Documents: {authorized_documents}")
+        # else:
+        #     # If using entity_id and access denied, try again with user's actual ID
+        #     if body.entity_id and hasattr(request.state, "user"):
+        #         user_authorized = request.state.user.get("id")
+        #         if doc_user_id == user_authorized:
+        #             authorized_documents = documents
+        #         else:
+        #             if body.entity_id == doc_user_id:
+        #                 logger.warning(
+        #                     f"Entity ID {body.entity_id} matches document user_id but user {user_authorized} is not authorized"
+        #                 )
+        #             else:
+        #                 logger.warning(
+        #                     f"Access denied for both entity ID {body.entity_id} and user {user_authorized} to document with user_id {doc_user_id}"
+        #                 )
+        #     else:
+        #         logger.warning(
+        #             f"Unauthorized access attempt by user {user_authorized} to a document with user_id {doc_user_id}"
+        #         )
 
-        return authorized_documents
+        return documents
 
         # Return documents with embeddings and filenames
         # return [

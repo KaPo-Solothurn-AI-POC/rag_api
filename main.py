@@ -2,7 +2,7 @@ import os
 import hashlib
 import aiofiles
 import aiofiles.os
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 from shutil import copyfileobj
 import traceback
 
@@ -617,10 +617,85 @@ async def store_document_in_vector_db(
 
 
 import uuid
+async def write_to_temp(file_path, temp_file_path):
+    try:
+        if not os.path.exists(file_path):
+            raise HTTPException(
+                status_code = status.HTTP_400_BAD_REQUEST,
+                detail = f"File not found: {file_path}"
+            )
+        async with aiofiles.open(temp_file_path, "wb") as temp_file:
+            chunk_size = 64 *1024
+            with open(file_path, "rb") as source_file:
+                while chunk := source_file.read(chunk_size):
+                    await temp_file.write(chunk)
+            # while content := await upload_file.read(chunk_size):
+            #     await temp_file.write(content)
+    except Exception as e:
+        logger.error(
+            "Failed to save uploaded file | Path: %s | Error: %s | Traceback: %s",
+            temp_file_path,
+            str(e),
+            traceback.format_exc(),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save the uploaded file. Error: {str(e)}",
+        )
+                    
+async def embed_in_vectordb(file_name, file_id, file_path, temp_file_path, user_id):
+    try:
+        #TODO: adapted for pdf documents, for other types, might need to be adjusted
+        loader, known_type, file_ext = get_loader(
+            file_name, "application/pdf", temp_file_path #upload_file.filename, upload_file.content_type, temp_file_path
+        )
+        data = loader.load()
+        logger.info(
+            f'User Id: {user_id}, File Name: {file_name}',
+        )
+        result = await store_document_in_vector_db(
+            data= data, 
+            file_id = file_id, 
+            file_path=file_path, 
+            user_id= user_id, 
+            clean_content=file_ext == "pdf"
+            )
+        if not result:
+            response_status = False
+            response_message = "Failed to process/store the file data."
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to process/store the file data.",
+            )
+        elif "error" in result:
+            response_status = False
+            response_message = "Failed to process/store the file data."
+            if isinstance(result["error"], str):
+                response_message = result["error"]
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="An unspecified error occurred.",
+                )
+        #all_ids.append(result["ids"])
+    except Exception as e:
+        response_status = False
+        response_message = f"Error during file processing: {str(e)}"
+        logger.error(
+            "Error during file processing: %s\nTraceback: %s",
+            str(e),
+            traceback.format_exc(),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Error during file processing: {str(e)}",
+        )
+                    
 @app.post("/upload_documents")
 async def embed_upload_documents(
     request: Request,
-    file_paths: List[str],
+    file_folder: Optional[str] = None, # Upload multiple files from specific folder
+    file_paths: Optional[List[str]] = None, # Optional, because only when we want to upload specific files
     user_id: str = "public",
 ):
     response_status = True
@@ -630,88 +705,20 @@ async def embed_upload_documents(
     temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
     os.makedirs(temp_base_path, exist_ok=True)
     
-    all_ids = []
-    try: 
-        
-        #TODO: Logic for file paths, temp_filepath and volumne might need to be adjusted
-        for file_path in file_paths:
-            file_id = str(uuid.uuid4())
-            file_name = os.path.basename(file_path)
-            #upload_file = create_upload_file_from_path(file_path)
-            temp_file_path = os.path.join(temp_base_path, file_name)
+    #all_ids = []
 
-            try:
-                if not os.path.exists(file_path):
-                    raise HTTPException(
-                        status_code = status.HTTP_400_BAD_REQUEST,
-                        detail = f"File not found: {file_path}"
-                    )
-                async with aiofiles.open(temp_file_path, "wb") as temp_file:
-                    chunk_size = 64 *1024
-                    with open(file_path, "rb") as source_file:
-                        while chunk := source_file.read(chunk_size):
-                            await temp_file.write(chunk)
-                    # while content := await upload_file.read(chunk_size):
-                    #     await temp_file.write(content)
-            except Exception as e:
-                logger.error(
-                    "Failed to save uploaded file | Path: %s | Error: %s | Traceback: %s",
-                    temp_file_path,
-                    str(e),
-                    traceback.format_exc(),
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to save the uploaded file. Error: {str(e)}",
-                )
+    if file_paths is not None:
+        try: 
             
-            try:
-                #TODO: adapted for pdf documents, for other types, might need to be adjusted
-                loader, known_type, file_ext = get_loader(
-                    file_name, "application/pdf", temp_file_path#upload_file.filename, upload_file.content_type, temp_file_path
-                )
-                data = loader.load()
-                logger.info(
-                    f'User Id: {user_id}, File Name: {file_name}',
-                )
-                result = await store_document_in_vector_db(
-                    data= data, 
-                    file_id = file_id, 
-                    file_path=file_path, 
-                    user_id= user_id, 
-                    clean_content=file_ext == "pdf"
-                    )
-                if not result:
-                    response_status = False
-                    response_message = "Failed to process/store the file data."
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail="Failed to process/store the file data.",
-                    )
-                elif "error" in result:
-                    response_status = False
-                    response_message = "Failed to process/store the file data."
-                    if isinstance(result["error"], str):
-                        response_message = result["error"]
-                    else:
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail="An unspecified error occurred.",
-                        )
-                all_ids.append(result["ids"])
-            except Exception as e:
-                response_status = False
-                response_message = f"Error during file processing: {str(e)}"
-                logger.error(
-                    "Error during file processing: %s\nTraceback: %s",
-                    str(e),
-                    traceback.format_exc(),
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Error during file processing: {str(e)}",
-                )
-            finally:
+            #TODO: Logic for file paths, temp_filepath and volumne might need to be adjusted
+            for file_path in file_paths:
+                file_id = str(uuid.uuid4())
+                file_name = os.path.basename(file_path)
+                temp_file_path = os.path.join(temp_base_path, file_name)
+
+                await write_to_temp(file_path, temp_file_path)
+                await embed_in_vectordb(file_name, file_id, file_path, temp_file_path, user_id)
+
                 try:
                     await aiofiles.os.remove(temp_file_path)
                 except Exception as e:
@@ -721,17 +728,50 @@ async def embed_upload_documents(
                         str(e),
                         traceback.format_exc(),
                     )
-        return {
-            "status": response_status,
-            "message": response_message, 
-            "ids": all_ids
-            }
-    except Exception as e:
-        logger.error(f"Error in upload_documents: {str(e)}\nTraceback: {traceback.format_exc()}")
-        return {"message": "An error occurred while processing files.", "status": "failure"}
+            return {
+                "status": response_status,
+                "message": response_message, 
+                #"ids": all_ids
+                }
+        except Exception as e:
+            logger.error(f"Error in upload_documents: {str(e)}\nTraceback: {traceback.format_exc()}")
+            return {"message": "An error occurred while processing files.", "status": "failure"}
+    elif file_paths is None:
+        try:
+            file_dir = os.path.join(RAG_UPLOAD_DIR, file_folder) 
+            pdf_file_paths = [
+                os.path.join(file_dir, f)
+                for f in os.listdir(file_dir)
+                if f.lower().endswith(".pdf")
+            ]
 
-           
-    
+            for file_path in pdf_file_paths:
+                file_id = str(uuid.uuid4())
+                file_name = os.path.basename(file_path)
+                temp_file_path = os.path.join(temp_base_path, file_name)
+
+                await write_to_temp(file_path, temp_file_path)
+                await embed_in_vectordb(file_name, file_id, file_path, temp_file_path, user_id)
+
+                try:
+                    await aiofiles.os.remove(temp_file_path)
+                except Exception as e:
+                    logger.error(
+                        "Failed to remove temporary file | Path: %s | Error: %s | Traceback: %s",
+                        temp_file_path,
+                        str(e),
+                        traceback.format_exc(),
+                    )
+            return {
+                "status": response_status,
+                "message": response_message, 
+                #"ids": all_ids
+                }
+        except Exception as e:
+            logger.error(f"Error in upload_documents: {str(e)}\nTraceback: {traceback.format_exc()}")
+            return {"message": "An error occurred while processing files.", "status": "failure"}
+
+
 @app.get("/documents/{id}/context")
 async def load_document_context(id: str):
     ids = [id]

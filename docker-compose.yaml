@@ -18,7 +18,8 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./uploads:/app/uploads
+      - .:/app
+      - /mnt/c/Data/PoCKAPO:/app/uploads
     depends_on:
       - db
     env_file:

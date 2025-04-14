@@ -45,7 +45,8 @@ from models import (
     QueryRequestBody,
     DocumentResponse,
     QueryMultipleBody,
-    ContextRequestBody
+    ContextRequestBody,
+    UploadRequest
 )
 from psql import PSQLDatabase, ensure_custom_id_index_on_embedding, pg_health_check
 from pgvector_routes import router as pgvector_router
@@ -693,11 +694,16 @@ async def embed_in_vectordb(file_name, file_id, file_path, temp_file_path, user_
                     
 @app.post("/upload_documents")
 async def embed_upload_documents(
+    body: UploadRequest,
     request: Request,
-    file_folder: Optional[str] = None, # Upload multiple files from specific folder
-    file_paths: Optional[List[str]] = None, # Optional, because only when we want to upload specific files
-    user_id: str = "public",
+    # file_folder: Optional[str] = None, # Upload multiple files from specific folder
+    # file_paths: Optional[List[str]] = None, # Optional, because only when we want to upload specific files
+    # user_id: str = "public",
 ):
+    file_paths = body.file_paths
+    file_folder = body.file_folder
+    user_id = body.user_id
+    
     response_status = True
     response_message = "File processed successfully."
     known_type = None

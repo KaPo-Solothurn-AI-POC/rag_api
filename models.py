@@ -31,6 +31,11 @@ class QueryRequestBody(BaseModel):
     k: int = 4
     entity_id: Optional[str] = None
 
+class UploadRequest(BaseModel):
+    file_paths: Optional[List[str]] = None
+    file_folder: Optional[str] = None
+    user_id: str = "public"
+    
 class ContextRequestBody(BaseModel):
     query: str
     k: int = 4

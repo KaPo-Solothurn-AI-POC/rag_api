@@ -582,6 +582,18 @@ async def store_document_in_vector_db(
         for doc in documents:
             doc.page_content = clean_text(doc.page_content)
 
+    filename = os.path.basename(file_path)
+    if filename.lower().endswith(".pdf"):
+        filename = filename[:-4]
+    parts = filename.split()
+    last_num_index = 0
+    for i, part in enumerate(parts):
+        if part.isdigit():
+            last_num_index = i
+    title_parts = parts[last_num_index + 1:]
+    file_name = " ".join(title_parts)
+    logger.info('File name:', file_name)
+
     # Preparing documents with page content and metadata for insertion.
     docs = [
         Document(
@@ -590,7 +602,7 @@ async def store_document_in_vector_db(
                 "file_id": file_id,
                 "user_id": user_id,
                 "digest": generate_digest(doc.page_content),
-                "file_name": os.path.basename(file_path),
+                "file_name": file_name,
                 "file_path": file_path,
                 #"created_at": datetime.now(datetime.timezone.utc),
                 **(doc.metadata or {}),

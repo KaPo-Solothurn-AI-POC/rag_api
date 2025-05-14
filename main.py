@@ -929,6 +929,7 @@ async def load_document_context(
     try:
         # Step 1: Get the embedding for the query
         embedding = vector_store.embedding_function.embed_query(body.query)
+        logger.info(f"Retrieved embedding: {embedding[:10]}")
         
         # Step 2: Perform a similarity search for the query in the vector store
         if isinstance(vector_store, AsyncPgVector):
@@ -936,9 +937,10 @@ async def load_document_context(
                 None,
                 vector_store.similarity_search_with_score_by_vector,
                 embedding,
-                k=body.k  # Retrieve top k relevant documents
+                k=body.k,  # Retrieve top k relevant documents
+                filter={"user_id": "public"}
             )
-            logger.info(documents)
+            logger.info(f"Fetched documents: {documents}")
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
                 embedding, k=body.k

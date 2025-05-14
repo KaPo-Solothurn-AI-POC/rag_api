@@ -53,7 +53,7 @@ POSTGRES_USER = get_env_variable("POSTGRES_USER", "myuser")
 POSTGRES_PASSWORD = get_env_variable("POSTGRES_PASSWORD", "mypassword")
 DB_HOST = get_env_variable("DB_HOST", "db")
 DB_PORT = get_env_variable("DB_PORT", "5432")
-COLLECTION_NAME = get_env_variable("COLLECTION_NAME", "testcollection")
+COLLECTION_NAME = get_env_variable("COLLECTION_NAME", "langchain")
 ATLAS_MONGO_DB_URI = get_env_variable(
     "ATLAS_MONGO_DB_URI", "mongodb://127.0.0.1:27018/LibreChat"
 )
@@ -70,12 +70,17 @@ PDF_EXTRACT_IMAGES = True if env_value == "true" else False
 CONNECTION_STRING = f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
 DSN = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
 
+
+
 ## Logging
 
 HTTP_RES = "http_res"
 HTTP_REQ = "http_req"
 
 logger = logging.getLogger()
+
+logger.info(f"Connection string: {CONNECTION_STRING}")
+logger.info(f"DSN: {DSN}")
 
 debug_mode = os.getenv("DEBUG_RAG_API", "False").lower() in (
     "true",
@@ -280,6 +285,8 @@ if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
         collection_name=COLLECTION_NAME,
         mode="async",
     )
+
+    logger.info(f"Using PGVector connection string: {CONNECTION_STRING}")
 elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
     # Backward compatability check
     if MONGO_VECTOR_COLLECTION:
@@ -295,6 +302,7 @@ elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
         mode="atlas-mongo",
         search_index=ATLAS_SEARCH_INDEX,
     )
+    logger.info(f"AtlasMongo connection string: {CONNECTION_STRING}")
 else:
     raise ValueError(f"Unsupported vector store type: {VECTOR_DB_TYPE}")
 
